@@ -1,3 +1,15 @@
+vyatta-image-tools (5.50) unstable; urgency=medium
+
+  * Find the live rootfs where current live-boot mounts it. Through Debian 10
+    the read-only rootfs appeared under /lib/live/mount/rootfs/; current
+    live-boot puts it under /run/live/rootfs/ with the medium on
+    /run/live/medium. get_live_rootfs_path() looked only at the old path, so
+    "install image" partitioned the disk, set up grub and then failed with
+    "Cannot find the squashfs image" -- the documented way to install DANOS
+    did not work on 2608 at all. Reproduced on both QEMU and VMware.
+
+ -- i-danos dev <dev@i-danos.dev>  Sat, 30 Aug 2026 19:00:00 +0800
+
 vyatta-image-tools (5.49) unstable; urgency=medium
 
   * Use environment variables to pass credentials from RPC to script
