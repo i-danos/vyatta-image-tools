@@ -64,7 +64,22 @@ what_is_mounted_on ()
 get_live_rootfs_path ()
 {
     local ROOTFS_DEV IMAGE
-    ROOTFS_DEV=( $(what_is_mounted_on '/lib/live/mount/rootfs.*') )
+    #
+    # live-boot moved its mount points. Through Debian 10 the read-only rootfs
+    # appeared under /lib/live/mount/rootfs/; current live-boot puts it under
+    # /run/live/rootfs/, with the medium on /run/live/medium. On trixie the old
+    # directory still exists but nothing is mounted there, so looking only at
+    # the old path finds no device, the backing file cannot be read, and the
+    # caller gives up with "Cannot find the squashfs image." -- which is to say
+    # "install image" does not work at all on a live boot.
+    #
+    # Try the current layout first and fall back, so an image built on either
+    # generation installs.
+    #
+    ROOTFS_DEV=( $(what_is_mounted_on '/run/live/rootfs/.*') )
+    if [ -z "${ROOTFS_DEV:-}" ] ; then
+	ROOTFS_DEV=( $(what_is_mounted_on '/lib/live/mount/rootfs.*') )
+    fi
     if [ ${#ROOTFS_DEV[@]} -gt 1 ] ; then
 	# PANIC!
 	echo "E: Found multiple rootfs devices: ${ROOTFS_DEV[@]}" >&2
@@ -83,7 +98,7 @@ get_live_rootfs_path ()
     # for backward compatibility with live-helper we keep the old mount-point
     # in this list
     #
-    for ROOT in ${IMAGE%/boot/*} ${IMAGE%/live/*} /live/image ; do
+    for ROOT in ${IMAGE%/boot/*} ${IMAGE%/live/*} /run/live/medium /live/image ; do
 	if [ -d "${SHUNIT_TMPDIR}${ROOT}" -a -n "$(what_is_mounted_on "${ROOT}")" ] ; then
 	    echo "${ROOT}"
 	    return
