@@ -1,3 +1,11 @@
+vyatta-image-tools (5.51) unstable; urgency=medium
+
+  * install image: show useradd's stderr only when it fails, so sssd 2.x's
+    "SSSD isn't configured" no longer prints twice during a successful
+    install, and stop the install if useradd fails
+
+ -- DANOS Open <miwide20190328@gmail.com>  Mon, 21 Sep 2026 23:36:52 +0800
+
 vyatta-image-tools (5.50) unstable; urgency=medium
 
   * Find the live rootfs where current live-boot mounts it. Through Debian 10
