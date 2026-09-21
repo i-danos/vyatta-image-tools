@@ -1144,9 +1144,36 @@ create_admin_account () {
     # to the postinstall script infrastructure. Also, do not use run_command
     # as it will out the encrypted password to the install log..
 
-    useradd --root $root --home-dir /home/${VII_ADMIN_USERNAME} -m \
-        --groups vyattacfg,vyattaadm,wireshark,systemd-journal \
-        --password ${VII_ADMIN_PASSWORD} --shell /bin/vbash ${VII_ADMIN_USERNAME}
+    # useradd's own stderr is captured rather than shown. shadow 4.17 runs
+    # /usr/sbin/sss_cache after every change to passwd/group/shadow, and sssd 2.x
+    # answers on a system where SSSD has never been configured -- which is every
+    # system being installed -- with
+    #
+    #     [sss_cache] ... Can't access '/var/lib/sss/db/config.ldb',
+    #     probably SSSD isn't configured
+    #
+    # twice per useradd (it is called once when the files are committed and once
+    # more when useradd finishes). sssd 1.16 did not say this, so 2105 printed
+    # nothing, and an operator now sees four lines of what reads as failure in
+    # the middle of a successful install. useradd exits 0 regardless.
+    #
+    # This is run_command's rule -- report a command's stderr only when it fails
+    # -- without run_command itself, which would put the command line, and so the
+    # password hash, into the install log. A failure still reaches the console,
+    # with the message but not the command line.
+    #
+    # Nothing checked useradd's exit status before. A failure here left the
+    # installer carrying on to "Done." with no account on the new system.
+    local useradd_err
+    if ! useradd_err=$(useradd --root $root \
+            --home-dir /home/${VII_ADMIN_USERNAME} -m \
+            --groups vyattacfg,vyattaadm,wireshark,systemd-journal \
+            --password ${VII_ADMIN_PASSWORD} --shell /bin/vbash \
+            ${VII_ADMIN_USERNAME} 2>&1 >/dev/null); then
+        becho "ERROR: useradd failed for [${VII_ADMIN_USERNAME}]" >&2
+        becho "${useradd_err}" >&2
+        fail_exit "Failed to create new admin user."
+    fi
 
     # we don't need this variable anymore
     unset VII_ADMIN_PASSWORD
