@@ -33,7 +33,18 @@ use XorpConfigParser;
 my $configd = Vyatta::Configd::Client->new();
 my $db      = $Vyatta::Configd::Client::AUTO;
 
-my $grub_cfg           = '/boot/grub/grub.cfg';
+# On a running, installed system /boot is not its own mount -- it is part of
+# the root overlay, whose upperdir is the *currently running* image's own
+# persistence directory. A plain '/boot/grub/grub.cfg' write therefore lands
+# inside that one image's private, ephemeral view, never reaching the shared
+# on-disk grub.cfg that GRUB itself reads at boot and that this same file's
+# readers (list_images() and friends, via get_live_image_root()) already
+# resolve correctly. Route the write through the same resolution the read
+# side uses, so both sides agree on what '/boot' means. Falls back to the
+# original path if resolution fails (e.g. genuinely no live image root, as on
+# first install from the live CD, where this constant is unused anyway).
+my $grub_cfg = eval { get_live_image_root() . '/boot/grub/grub.cfg' }
+    // '/boot/grub/grub.cfg';
 my $grub_template      = '/opt/vyatta/etc/grub/default-union-grub.template';
 my $grub_onie_cfg      = '/boot/grub-master/boot/grub/grub.cfg';
 my $grub_onie_template = '/opt/vyatta/etc/grub/grub-onie.template';
