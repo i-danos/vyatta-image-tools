@@ -1,3 +1,17 @@
+vyatta-image-tools (5.52) unstable; urgency=medium
+
+  * install image: exclude ./.disk/mkisofs from the ISO checksum check.
+    Debian 13's live-build writes that file -- the exact xorriso command
+    line used to assemble the ISO -- during ISO assembly itself, after its
+    own checksums stage has already recorded md5sum.txt. The file differs
+    from what was hashed on every build, by construction (it embeds the
+    ISO's own output filename and build timestamp), not by corruption.
+    Left unexcluded this failed "add system image" against every 2608
+    ISO; discovered by acceptance-testing an upgrade against the official
+    2105 ISO, whose live-build did not write this file.
+
+ -- DANOS Open <miwide20190328@gmail.com>  Tue, 22 Sep 2026 11:45:00 +0800
+
 vyatta-image-tools (5.51) unstable; urgency=medium
 
   * install image: show useradd's stderr only when it fails, so sssd 2.x's
