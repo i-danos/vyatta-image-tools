@@ -1,3 +1,21 @@
+vyatta-image-tools (5.54) unstable; urgency=medium
+
+  * vyatta-install-image.functions: flush the new image to disk before
+    run_post_install points the boot menu at it. install_image() copied the
+    squashfs, kernel and initrd and returned without any sync; the grub.cfg
+    update that follows is written by rename over the old file, which ext4
+    flushes eagerly, so grub.cfg (already naming the new image as the
+    default) could reach the disk while the image data was still in the page
+    cache. A power cut in that window left a machine that cannot boot and
+    cannot recover on its own: "file /boot/<name>/vmlinuz not found" waiting
+    at "Press any key to continue" at the GRUB prompt, or, with the kernel
+    present and the squashfs truncated, "Can not mount ... .squashfs" and an
+    (initramfs) shell. Both need someone at the console to pick the old image.
+    Found by cutting power at 13 points across an "add system image" run: the
+    two cuts at 24.7s and 26.3s of a 31s install left an unbootable default.
+
+ -- i-danos dev <dev@i-danos.dev>  Thu, 24 Sep 2026 16:45:00 +0800
+
 vyatta-image-tools (5.53) unstable; urgency=medium
 
   * vyatta_update_grub.pl: write grub.cfg to the same path list_images() and

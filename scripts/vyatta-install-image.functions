@@ -784,6 +784,10 @@ EOF
     echo Copying kernel and initrd images...
     cp --no-dereference --preserve=all $boot_files \
 	$WRITE_ROOT/boot/$image_name/ >&/dev/null
+
+    # Flush the copies before run_post_install points the boot menu at them.
+    echo Flushing the new image to disk...
+    sync -f $WRITE_ROOT/boot/$image_name || sync
 }
 
 install_grub_bios ()
