@@ -1,3 +1,18 @@
+vyatta-image-tools (5.55) unstable; urgency=medium
+
+  * vyatta-install-image.functions: drop linuxefi from the hardcoded GRUB EFI
+    module list. GRUB 2.12 (Debian 13) folded it into the linux module and no
+    longer ships linuxefi.mod, so on any UEFI machine install_grub_efi's
+    grub-install failed with "cannot open /usr/lib/grub/x86_64-efi/linuxefi.mod"
+    and the whole installation exited: the image could not be installed to disk
+    on UEFI at all. Of the 55 modules listed, linuxefi was the only one missing
+    from the image; the same grub-install command, run against a loop device
+    with a real ESP, fails with it and finishes without it.
+  * Includes the 5.54 change (flush the new image to disk before the boot menu
+    is pointed at it).
+
+ -- i-danos dev <dev@i-danos.dev>  Thu, 24 Sep 2026 18:10:00 +0800
+
 vyatta-image-tools (5.54) unstable; urgency=medium
 
   * vyatta-install-image.functions: flush the new image to disk before

@@ -74,7 +74,6 @@ grub_efi_modules="all_video
         keystatus
         loadenv
         linux
-        linuxefi
         lsefi
         lsefimmap
         lsefisystab
