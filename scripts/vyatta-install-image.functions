@@ -2547,12 +2547,43 @@ is_opt_vyatta_config () {
     return 1
 }
 
+# Succeed if any certificate in the signature chain of the signed binary $1
+# has a subject (DN) equal to one of the remaining arguments (the subjects of
+# the certificates in the firmware db).
+#
+# The whole chain has to be considered, not just the signing certificate.
+# Firmware verifies a chain up to a db entry, and for shim that entry is the
+# Microsoft UEFI CA, not the leaf that signed the binary: the leaf subject is
+# "Microsoft Windows UEFI Driver Publisher" and is never in db. sbverify --list
+# prints one "subject:" line per certificate in the chain, so reading them as
+# one string made the comparison fail for every Microsoft-signed shim, and
+# add system image refused an image that Secure Boot would have booted.
+sig_chain_in_db ()
+{
+    local bin=$1
+    local chain=()
+    local subj db_subj
+
+    shift
+    mapfile -t chain < <(sbverify --list "$bin" 2>/dev/null | \
+        sed -n 's/^.*subject: //ip')
+    [ "${#chain[@]}" -gt 0 ] || return 2
+
+    for subj in "${chain[@]}"; do
+        for db_subj in "$@"; do
+            [ "$subj" == "$db_subj" ] && return 0
+        done
+    done
+    return 1
+}
+
 # Check whether the image will boot with secure boot enabled. The signed
 # binaries would ideally be checked with 'sbverify --cert <cert.pem> <bin>',
 # where 'openssl x509 -inform der -in <cert.der> -outform pem -out <cert.pem>'
 # for all certs in the signature list. However, this check fails for expired
-# certs, whereas secure boot does not mind. So just check for the subject (DN),
-# which is sufficient unless tampered with for shim, grub & kernel to boot.
+# certs, whereas secure boot does not mind. So just check for the subject (DN)
+# of any certificate in the chain, which is sufficient unless tampered with
+# for shim, grub & kernel to boot.
 check_binary_signatures ()
 {
     local ROOT=$1
@@ -2604,23 +2635,18 @@ check_binary_signatures ()
             becho Signing check, file not found: "$bin"
             return 1
         fi
-        sb_subj=$(sbverify --list "$bin" 2>/dev/null | \
-            sed -n 's/^.*subject: //ip')
-        if [ "$sb_subj" == "" ]; then
-            becho Signing check, failed to get signature for "$bin"
-            return 1
-        fi
-        match=0
-        for subj in "${certs_subj[@]}"; do
-            if [ "$subj" == "$sb_subj" ]; then
-                match=1
-                break
-            fi
-        done
-        if [ "$match" -eq 0 ]; then
-            becho Signing check, no match in signature list for "$bin"
-            return 1
-        fi
+        sig_chain_in_db "$bin" "${certs_subj[@]}"
+        case $? in
+            0) ;;
+            2)
+                becho Signing check, failed to get signature for "$bin"
+                return 1
+                ;;
+            *)
+                becho Signing check, no match in signature list for "$bin"
+                return 1
+                ;;
+        esac
     done
 
     return 0
