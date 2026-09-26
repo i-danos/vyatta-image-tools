@@ -2589,6 +2589,8 @@ check_binary_signatures ()
     local ROOT=$1
     local certs_dir
     local certs_subj=()
+    local mok_subj=()
+    local trusted=()
     local sbf=(/sys/firmware/efi/efivars/SecureBoot-*)
 
     # No check needed if not EFI or secure boot disabled
@@ -2614,13 +2616,32 @@ check_binary_signatures ()
        fi
     done
 
-    cd - &>/dev/null || fail_exit "Signing check, cd - failed"
-    rm -rf "$certs_dir"
+    # Shim, not the firmware, verifies grub and the kernel: it trusts the
+    # certificates enrolled as MOK (and its own vendor certificate) in addition
+    # to db. This image's grub and kernel are signed by the OBS project
+    # certificate, which is enrolled as a MOK and is not in db, so db alone
+    # rejects a chain the machine boots. Exporting is best effort: without
+    # mokutil, or with nothing enrolled, only db counts.
 
     if [ "${#certs_subj[@]}" -eq 0 ]; then
+            cd - &>/dev/null || fail_exit "Signing check, cd - failed"
+            rm -rf "$certs_dir"
             becho "Signing check, failed to get signature list"
             return 1
     fi
+
+    if command -v mokutil &>/dev/null; then
+        mokutil --export &>/dev/null
+        for cert in MOK-*.der; do
+            if [ -f "$cert" ]; then
+                mok_subj+=("$(openssl x509 -inform der -in "$cert" -noout \
+                    -subject -nameopt compat | sed -n 's/^subject=//ip')")
+            fi
+        done
+    fi
+
+    cd - &>/dev/null || fail_exit "Signing check, cd - failed"
+    rm -rf "$certs_dir"
 
     # Check the signed binaries for shim, grub & kernel
 
@@ -2635,7 +2656,12 @@ check_binary_signatures ()
             becho Signing check, file not found: "$bin"
             return 1
         fi
-        sig_chain_in_db "$bin" "${certs_subj[@]}"
+        # Firmware verifies shim against db alone; shim verifies the rest.
+        case "$bin" in
+            */shimx64.efi.signed) trusted=("${certs_subj[@]}") ;;
+            *) trusted=("${certs_subj[@]}" "${mok_subj[@]}") ;;
+        esac
+        sig_chain_in_db "$bin" "${trusted[@]}"
         case $? in
             0) ;;
             2)

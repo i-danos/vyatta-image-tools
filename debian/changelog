@@ -1,3 +1,21 @@
+vyatta-image-tools (5.57) unstable; urgency=medium
+
+  * vyatta-install-image.functions: check_binary_signatures also trusts the
+    certificates enrolled as MOK when checking grub and the kernel. 5.56 made
+    the shim check pass, but on a Secure Boot machine the check then failed at
+    grub: this image's grub and kernel are signed by the OBS project
+    certificate, which is enrolled as a MOK and is not in the firmware db, and
+    it is shim, not the firmware, that verifies them against the MOK list.
+    The MOK certificates are exported with mokutil --export and compared the
+    same way as db (openssl compat subject). Shim is still checked against db
+    alone, since firmware does not consult MOK for it. Without mokutil or with
+    nothing enrolled only db counts, as before.
+    Checked on an installed system under OVMF Secure Boot with the real shim,
+    grub and kernel: the check returns 0 with the MOK included and fails at grub
+    with it disabled.
+
+ -- i-danos dev <dev@i-danos.dev>  Sat, 26 Sep 2026 12:10:00 +0800
+
 vyatta-image-tools (5.56) unstable; urgency=medium
 
   * vyatta-install-image.functions: check_binary_signatures now accepts a
