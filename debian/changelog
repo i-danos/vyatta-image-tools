@@ -1,3 +1,20 @@
+vyatta-image-tools (5.56) unstable; urgency=medium
+
+  * vyatta-install-image.functions: check_binary_signatures now accepts a
+    binary whose signing chain reaches a certificate in the firmware db,
+    instead of comparing only the signing certificate's subject. Firmware
+    verifies a chain up to a db entry, and for a Microsoft-signed shim that
+    entry is "Microsoft Corporation UEFI CA 2011", not the leaf ("Microsoft
+    Windows UEFI Driver Publisher"), which is never in db. sbverify --list
+    prints one "subject:" line per certificate and the old code read them as one
+    string, so the comparison could not succeed even when the CA was in db. On a
+    Secure Boot machine add system image reported "no match in signature list"
+    for shim and its default answer refused an image the machine would have
+    booted. The comparison is now the new helper sig_chain_in_db, which also
+    tells "no signature" from "no match".
+
+ -- i-danos dev <dev@i-danos.dev>  Sat, 26 Sep 2026 10:30:00 +0800
+
 vyatta-image-tools (5.55) unstable; urgency=medium
 
   * vyatta-install-image.functions: drop linuxefi from the hardcoded GRUB EFI
