@@ -5,6 +5,10 @@ AM_PL_LOG_FLAGS = -w
 
 TESTS = postinstall.vyatta-misc.sh
 TESTS += vyatta-install-image.functions.sh
+TESTS += install-image-copy-failure.sh
+TESTS += install-image-fault-injection.sh
+TESTS += sig-chain-heuristic.sh
+TESTS += admin-password-hash.sh
 TESTS += vyatta-live-image.sh
 TESTS += vyatta_live.pl
 TESTS += preinstall.virtualization.sh

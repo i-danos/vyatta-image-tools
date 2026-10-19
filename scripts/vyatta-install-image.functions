@@ -345,11 +345,21 @@ add_console_entry () {
 }
 
 # $1: user name
-# $2: encrypted password
+# $2: encrypted password (the plain crypt(3) string, e.g. $6$salt$hash)
 # $3: config file
+#
+# The hash is spliced into a sed replacement that uses '/' as its delimiter, so
+# the characters special in a replacement (\, & and the delimiter) are escaped
+# here. Callers must pass the hash unescaped: the same value is later handed to
+# useradd, where an escaped '/' ends up as a literal backslash in /etc/shadow
+# and the account can never log in.
 set_encrypted_password () {
+  local pw=$2 amp='\&'
+  pw=${pw//\\/\\\\}
+  pw=${pw//&/"$amp"}
+  pw=${pw//\//\\/}
   sed -i -e \
-    "/ user $1 {/,/}/s/\w*-password.*\$/encrypted-password \"$2\"/" $3
+    "/ user $1 {/,/}/s/\w*-password.*\$/encrypted-password \"$pw\"/" $3
 }
 
 _dialog_enter_password ()
@@ -392,7 +402,10 @@ _dialog_enter_password ()
     done
 
     if [[ $plaintext == "" ]]; then
-        echo $(SECRET="$pwd1" encrypt_shadow_passwd | sed 's:/:\\/:g')
+        # The plain hash. It is escaped for sed where it is spliced into
+        # config.boot (set_encrypted_password), not here: it is also passed
+        # to useradd, which must see the real '/' characters.
+        echo "$(SECRET="$pwd1" encrypt_shadow_passwd)"
     else
         echo "$pwd1"
     fi
@@ -716,6 +729,25 @@ validate_image_name ()
     fi
 }
 
+# Abort an install after the new image's directory was created: remove what
+# this call put there so the boot menu cannot pick up a half-written image and
+# a retry under the same name is not refused. $1 = that directory, which the
+# caller owns (it created it with a mkdir that failed if the name existed).
+# If the removal itself fails the leftover is named in the error: it would
+# block a retry and must not be hidden behind the original failure.
+fail_image_install ()
+{
+    local image_dir=$1; shift
+    if [ -n "$image_dir" ]; then
+        rm -rf -- "$image_dir" 2>/dev/null
+        if [ -e "$image_dir" ] || [ -L "$image_dir" ]; then
+            becho "ERROR: could not remove the incomplete image directory $image_dir;" \
+                  "remove it manually before retrying the install."
+        fi
+    fi
+    fail_exit "$@"
+}
+
 install_image ()
 {
     # root directory to install from
@@ -744,21 +776,33 @@ install_image ()
 	exit 1
     fi
 
-    # make the dir for the new version
-    if ! install -m755 -d $WRITE_ROOT/boot/$image_name; then
+    # make the dir for the new version. mkdir (not install -d) so that the
+    # creation itself decides ownership: it fails if the name already exists,
+    # including when a concurrent install created it after the check above.
+    local new_image_dir=$WRITE_ROOT/boot/$image_name
+    if ! install -m755 -d $WRITE_ROOT/boot; then
 	fail_exit 'Cannot create directory for new release.'
     fi
-    # make dir for backing store
-    local rw_dir=$WRITE_ROOT/boot/$image_name/$(get_live_persistence_label)
-    if ! install -m755 -d $rw_dir; then
+    if ! mkdir -m755 -- "$new_image_dir" 2>/dev/null; then
+	if [ -e "$new_image_dir" ] || [ -L "$new_image_dir" ]; then
+	    fail_exit "An image called $image_name is already installed"
+	fi
 	fail_exit 'Cannot create directory for new release.'
+    fi
+    # From here the image directory is ours (it did not exist above): any
+    # failure removes it again so no half-made image is left for the boot menu
+    # and a retry under the same name is not refused.
+    # make dir for backing store
+    local rw_dir=$new_image_dir/$(get_live_persistence_label)
+    if ! install -m755 -d $rw_dir; then
+	fail_image_install "$new_image_dir" 'Cannot create directory for new release.'
     fi
 
     # create persistence.conf for new persistence label
     if [ "${rw_dir##*/}" = "persistence" ] ; then
-	cat > $rw_dir/persistence.conf <<EOF
-/ union
-EOF
+	if ! echo '/ union' > $rw_dir/persistence.conf; then
+	    fail_image_install "$new_image_dir" 'Cannot write persistence.conf for new release.'
+	fi
     fi
 
     echo Copying squashfs image...
@@ -774,19 +818,53 @@ EOF
         boot_files=$(find $boot_dir -maxdepth 1 -type f -o -type l 2>/dev/null)
         if [ ! -f "$squash_img" ] || [ -z "$boot_files" ]; then
             # not a live CD boot either. give up.
-            fail_exit 'Cannot find the squashfs image.'
+            fail_image_install "$WRITE_ROOT/boot/$image_name" 'Cannot find the squashfs image.'
         fi
     fi
 
     local target_squash=$WRITE_ROOT/boot/$image_name/$image_name.squashfs
-    cp -p $squash_img $target_squash >&/dev/null
+    if ! cp -p $squash_img $target_squash; then
+        fail_image_install "$WRITE_ROOT/boot/$image_name" "Failed to copy the squashfs image to $target_squash."
+    fi
+    if ! cmp -s "$squash_img" "$target_squash"; then
+        fail_image_install "$WRITE_ROOT/boot/$image_name" "Copied squashfs image differs from the source: $target_squash."
+    fi
     echo Copying kernel and initrd images...
-    cp --no-dereference --preserve=all $boot_files \
-	$WRITE_ROOT/boot/$image_name/ >&/dev/null
+    # A bootable image needs a kernel and an initrd (regular files or the
+    # symlinks to them, as in the image's /boot).
+    local have_kernel='' have_initrd='' bf
+    for bf in $boot_files; do
+        case "${bf##*/}" in
+            vmlinuz*) have_kernel=1 ;;
+            initrd*)  have_initrd=1 ;;
+        esac
+    done
+    if [ -z "$have_kernel" ] || [ -z "$have_initrd" ]; then
+        fail_image_install "$WRITE_ROOT/boot/$image_name" "The image has no kernel or no initrd to install."
+    fi
+    if ! cp --no-dereference --preserve=all $boot_files \
+	$WRITE_ROOT/boot/$image_name/; then
+        fail_image_install "$WRITE_ROOT/boot/$image_name" "Failed to copy the kernel and initrd images."
+    fi
+    # Verify what landed: symlinks keep their target, files keep their bytes.
+    local dst
+    for bf in $boot_files; do
+        dst=$WRITE_ROOT/boot/$image_name/${bf##*/}
+        if [ -L "$bf" ]; then
+            if [ "$(readlink "$bf")" != "$(readlink "$dst" 2>/dev/null)" ]; then
+                fail_image_install "$WRITE_ROOT/boot/$image_name" "Boot link is wrong after copy: ${bf##*/}."
+            fi
+        elif ! cmp -s "$bf" "$dst"; then
+            fail_image_install "$WRITE_ROOT/boot/$image_name" "Boot file differs after copy: ${bf##*/}."
+        fi
+    done
 
     # Flush the copies before run_post_install points the boot menu at them.
+    # A failed sync -f must not be hidden by a later plain sync.
     echo Flushing the new image to disk...
-    sync -f $WRITE_ROOT/boot/$image_name || sync
+    if ! sync -f $WRITE_ROOT/boot/$image_name; then
+        fail_image_install "$WRITE_ROOT/boot/$image_name" "Failed to flush the new image to disk."
+    fi
 }
 
 install_grub_bios ()
@@ -2547,9 +2625,18 @@ is_opt_vyatta_config () {
     return 1
 }
 
-# Succeed if any certificate in the signature chain of the signed binary $1
-# has a subject (DN) equal to one of the remaining arguments (the subjects of
-# the certificates in the firmware db).
+# COMPATIBILITY HEURISTIC, not a trust verification. Succeed if any certificate
+# in the signature chain that "sbverify --list" prints for the signed binary $1
+# has a subject (DN) equal to one of the remaining arguments (subjects of the
+# certificates in the firmware db, or enrolled as MOK). Nothing here checks a
+# signature: a matching DN only says the binary names a certificate we expect.
+# It is a pre-install sanity check for "would this image obviously not boot",
+# and says nothing about whether the signature is valid or the binary untampered.
+#
+# Return: 0 the chain names a known subject
+#         1 sbverify listed a chain but no subject matched
+#         2 no usable chain: sbverify failed (any nonzero status, whatever it
+#           printed first), printed no subject, or only empty subjects
 #
 # The whole chain has to be considered, not just the signing certificate.
 # Firmware verifies a chain up to a db entry, and for shim that entry is the
@@ -2562,35 +2649,58 @@ sig_chain_in_db ()
 {
     local bin=$1
     local chain=()
-    local subj db_subj
+    local listing subj db_subj
 
     shift
-    mapfile -t chain < <(sbverify --list "$bin" 2>/dev/null | \
-        sed -n 's/^.*subject: //ip')
+    # A failing sbverify must never pass on whatever it managed to print:
+    # keep its exit status instead of losing it in a pipeline.
+    listing=$(sbverify --list "$bin" 2>/dev/null) || return 2
+    mapfile -t chain < <(printf '%s\n' "$listing" | sed -n 's/^.*subject: //ip')
     [ "${#chain[@]}" -gt 0 ] || return 2
 
+    local usable=0
     for subj in "${chain[@]}"; do
+        [ -n "$subj" ] || continue          # an empty DN matches nothing
+        usable=1
         for db_subj in "$@"; do
+            [ -n "$db_subj" ] || continue
             [ "$subj" == "$db_subj" ] && return 0
         done
     done
+    [ "$usable" -eq 1 ] || return 2
     return 1
 }
 
-# Check whether the image will boot with secure boot enabled. The signed
-# binaries would ideally be checked with 'sbverify --cert <cert.pem> <bin>',
-# where 'openssl x509 -inform der -in <cert.der> -outform pem -out <cert.pem>'
-# for all certs in the signature list. However, this check fails for expired
-# certs, whereas secure boot does not mind. So just check for the subject (DN)
-# of any certificate in the chain, which is sufficient unless tampered with
-# for shim, grub & kernel to boot.
+# Which subjects count for which binary (same heuristic as above). $2 and $3
+# are the NAMES of the arrays holding the db subjects and the MOK subjects.
+# The firmware checks shim against db alone; shim then checks grub and the
+# kernel against MOK and its own vendor certificate in addition to db.
+sig_chain_trusted_for ()
+{
+    local bin=$1
+    local -n _db_subjects=$2 _mok_subjects=$3
+
+    case "$bin" in
+        */shimx64.efi.signed) sig_chain_in_db "$bin" "${_db_subjects[@]}" ;;
+        *) sig_chain_in_db "$bin" "${_db_subjects[@]}" "${_mok_subjects[@]}" ;;
+    esac
+}
+
+# Check, as a compatibility heuristic, whether the image looks like it will
+# boot with secure boot enabled. The signed binaries would ideally be checked
+# with 'sbverify --cert <cert.pem> <bin>', where
+# 'openssl x509 -inform der -in <cert.der> -outform pem -out <cert.pem>' for all
+# certs in the signature list. However, that check fails for expired certs,
+# whereas secure boot does not mind. So this only compares the subject (DN) of
+# the certificates in each binary's chain with the db and MOK subjects. That is
+# NOT cryptographic verification: it does not validate any signature and cannot
+# detect a tampered binary. A pass means "names a known certificate" only.
 check_binary_signatures ()
 {
     local ROOT=$1
     local certs_dir
     local certs_subj=()
     local mok_subj=()
-    local trusted=()
     local sbf=(/sys/firmware/efi/efivars/SecureBoot-*)
 
     # No check needed if not EFI or secure boot disabled
@@ -2656,12 +2766,7 @@ check_binary_signatures ()
             becho Signing check, file not found: "$bin"
             return 1
         fi
-        # Firmware verifies shim against db alone; shim verifies the rest.
-        case "$bin" in
-            */shimx64.efi.signed) trusted=("${certs_subj[@]}") ;;
-            *) trusted=("${certs_subj[@]}" "${mok_subj[@]}") ;;
-        esac
-        sig_chain_in_db "$bin" "${trusted[@]}"
+        sig_chain_trusted_for "$bin" certs_subj mok_subj
         case $? in
             0) ;;
             2)

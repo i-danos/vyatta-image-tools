@@ -870,6 +870,10 @@ oneTimeSetUp ()
     TMPDIR=${SHUNIT_TMPDIR}
     export TMPDIR
 
+    # vii.defaults calls the real helper from another package; stand in for it
+    type encrypt_shadow_passwd >/dev/null 2>&1 || \
+        encrypt_shadow_passwd() { echo fixture-hash; }
+
     . ${THIS_DIR}/../scripts/vyatta-install-image.functions
     . ${THIS_DIR}/../scripts/vyatta-create-partition.functions
     . ${THIS_DIR}/../vii_database/vii.defaults
